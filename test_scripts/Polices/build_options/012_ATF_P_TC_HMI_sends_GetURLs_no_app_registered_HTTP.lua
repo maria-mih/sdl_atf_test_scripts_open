@@ -28,9 +28,12 @@ local commonSteps = require('user_modules/shared_testcases/commonSteps')
 local commonFunctions = require('user_modules/shared_testcases/commonFunctions')
 local testCasesForPolicyTable = require('user_modules/shared_testcases/testCasesForPolicyTable')
 local testCasesForPolicyTableSnapshot = require('user_modules/shared_testcases/testCasesForPolicyTableSnapshot')
+local commonTestCases = require('user_modules/shared_testcases/commonTestCases')
+
 
 --[[ General Precondition before ATF start ]]
 commonSteps:DeleteLogsFileAndPolicyTable()
+testCasesForPolicyTable:Precondition_updatePolicy_By_overwriting_preloaded_pt("files/jsons/Policies/Policy_Table_Update/endpoints_appId.json")
 --TODO: Should be removed when issue: "ATF does not stop HB timers by closing session and connection" is fixed
 config.defaultProtocolVersion = 2
 
@@ -41,9 +44,12 @@ require('user_modules/AppTypes')
 
 --[[ Preconditions ]]
 commonFunctions:newTestCasesGroup("Preconditions")
+function Test.Precondition_Wait()
+  commonTestCases:DelayedExp(1000)
+end
 
-function Test.Precondition_PTU_flow_SUCCESS ()
-  testCasesForPolicyTable:flow_PTU_SUCCEESS_HTTP()
+function Test:Precondition_PTU_flow_SUCCESS ()
+  testCasesForPolicyTable:flow_PTU_SUCCEESS_HTTP(self)
 end
 
 function Test:Precondition_UnregisterApp()
@@ -63,32 +69,49 @@ commonFunctions:newTestCasesGroup("Test")
 
 function Test:TestStep_PTU_GetURLs_NoAppRegistered()
   local endpoints = {}
-  local is_app_esxist = false
+  --TODO(istoimenova): Should be removed when "[GENIVI] HTTP: sdl_snapshot.json is not saved to file system" is fixed.
+  if ( commonSteps:file_exists( '/tmp/fs/mp/images/ivsu_cache/sdl_snapshot.json') ) then
+    testCasesForPolicyTableSnapshot:extract_pts()
 
-  for i = 1, #testCasesForPolicyTableSnapshot.pts_endpoints do
-    if (testCasesForPolicyTableSnapshot.pts_endpoints[i].service == "0x07") then
-      endpoints[#endpoints + 1] = { url = testCasesForPolicyTableSnapshot.pts_endpoints[i].value, appID = nil}
+    for i = 1, #testCasesForPolicyTableSnapshot.pts_endpoints do
+      if (testCasesForPolicyTableSnapshot.pts_endpoints[i].service == "0x07") then
+        endpoints[#endpoints + 1] = {
+          url = testCasesForPolicyTableSnapshot.pts_endpoints[i].value,
+          appID = testCasesForPolicyTableSnapshot.pts_endpoints[i].appID}
+      end
     end
-
-    if (testCasesForPolicyTableSnapshot.pts_endpoints[i].service == "app1") then
-      -- app id should be included in PTS but not to be used
-      is_app_esxist = true
-    end
+  else
+    commonFunctions:printError("sdl_snapshot is not created.")
+    endpoints = { {url = "http://policies.telematics.ford.com/api/policies", appID = nil} }
   end
 
   local RequestId = self.hmiConnection:SendRequest("SDL.GetURLS", { service = 7 })
 
-  EXPECT_HMIRESPONSE(RequestId,{result = {code = 0, method = "SDL.GetURLS", urls = endpoints} } )
-  :Do(function(_,_)
-      if(is_app_esxist == false) then
-        self:FailTestCase("Used URLs are default as expected! Endpoints for application doesn't exist!")
+  EXPECT_HMIRESPONSE(RequestId,{result = {code = 0, method = "SDL.GetURLS"} } )
+  :ValidIf(function(_,data)
+    local is_correct = {}
+    for i = 1, #data.result.urls do
+      is_correct[i] = false
+      for j = 1, #endpoints do
+        if ( data.result.urls[i].url == endpoints[j].url ) then
+          is_correct[i] = true
+        end
       end
-    end)
+    end
+    if(#data.result.urls ~= #endpoints ) then
+      self:FailTestCase("Number of urls is not as expected: "..#endpoints..". Real: "..#data.result.urls)
+    end
+    for i = 1, #is_correct do
+      if(is_correct[i] == false) then
+        self:FailTestCase("url: "..data.result.urls[i].url.." is not correct. Expected: "..endpoints[i].url)
+      end
+    end
+  end)
 end
 
 --[[ Postconditions ]]
 commonFunctions:newTestCasesGroup("Postconditions")
-
+testCasesForPolicyTable:Restore_preloaded_pt()
 function Test.Postcondition_Stop_SDL()
   StopSDL()
 end
